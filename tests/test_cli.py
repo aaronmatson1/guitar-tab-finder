@@ -278,3 +278,58 @@ def test_song_reports_when_audio_cannot_be_had(offline, monkeypatch, capsys):
 def test_a_bad_link_is_a_clean_error(capsys):
     assert main(["find", "https://example.com/not-music"]) == 2
     assert "unsupported link" in capsys.readouterr().err
+
+
+# --- the command list itself ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command", ["find", "analyze", "solo", "song", "chord", "key", "serve", "tunings"]
+)
+def test_every_command_is_registered(command, capsys):
+    """Each documented command exists and has usable help.
+
+    This is the test that would have caught a stale install: the failure mode
+    is `invalid choice: 'serve'`, which looks like a bug in the code and is
+    really an old version on the path.
+    """
+    from tabfinder.cli import COMMANDS, build_parser
+
+    assert command in COMMANDS
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args([command, "--help"])
+    assert excinfo.value.code == 0
+    assert command in capsys.readouterr().out
+
+
+def test_missing_optional_dependency_is_a_message_not_a_traceback(monkeypatch, capsys):
+    import tabfinder.web as web
+
+    def no_flask():
+        raise RuntimeError(
+            "The web UI needs Flask. Install it with:\n"
+            "    pip install 'guitar-tab-finder[web]'"
+        )
+
+    monkeypatch.setattr(web, "create_app", no_flask)
+    assert main(["serve"]) == 3
+    captured = capsys.readouterr()
+    assert "pip install" in captured.err
+    assert "Traceback" not in captured.err
+    # And it must not have announced a URL it cannot serve.
+    assert "http://" not in captured.out
+
+
+def test_serve_builds_the_app_before_announcing_a_url(monkeypatch, capsys):
+    import tabfinder.web as web
+
+    calls = []
+
+    class FakeApp:
+        def run(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(web, "create_app", lambda: FakeApp())
+    assert main(["serve", "--port", "9999"]) == 0
+    assert calls and calls[0]["port"] == 9999
+    assert "http://127.0.0.1:9999" in capsys.readouterr().out

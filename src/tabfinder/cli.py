@@ -515,6 +515,10 @@ def cmd_key(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     from .web import create_app
 
+    # Build the app first: a missing dependency should be reported, not
+    # announced as a URL that never answers.
+    app = create_app()
+
     url = f"http://{args.host}:{args.port}"
     print(f"tabfinder web UI on {url}")
     if args.host not in ("127.0.0.1", "localhost"):
@@ -528,7 +532,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         import webbrowser
 
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    create_app().run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
     return 0
 
 
@@ -563,13 +567,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (NoteParseError, ValueError, FileNotFoundError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except Exception as exc:  # noqa: BLE001
-        from .analysis.audio import AudioUnavailable
-
-        if isinstance(exc, AudioUnavailable):
-            print(f"error: {exc}", file=sys.stderr)
-            return 3
-        raise
+    except RuntimeError as exc:
+        # Raised when an optional extra is missing - the audio stack, or Flask
+        # for the web UI. The message already says what to install.
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":  # pragma: no cover

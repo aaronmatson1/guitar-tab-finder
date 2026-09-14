@@ -65,6 +65,20 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e '.[audio,dev]'
 ```
 
+Already cloned it before? Pull first — the branch has moved:
+
+```bash
+git checkout claude/guitar-tab-finder-agent-i1jnul
+git pull
+pip install -e '.[audio,web,dev]'
+```
+
+If a command comes back as `invalid choice: 'serve'` (or `'solo'`), that is a
+stale install rather than a bug: the package on your path predates the command.
+`tabfinder --help` lists what your install actually has. Re-running
+`pip install -e .` from the updated checkout fixes it — the `-e` matters, since
+a non-editable install keeps serving the copy it was built from.
+
 Nothing below needs the network or an audio file of your own:
 
 ```bash
@@ -115,9 +129,13 @@ tabfinder song https://youtu.be/6hzrDeceEKc
 ## Install
 
 ```bash
-pip install -e .            # search, chords, keys, shapes
-pip install -e '.[audio]'   # + audio analysis (librosa, numpy, scipy)
+pip install -e .                    # search, chords, keys, shapes
+pip install -e '.[audio]'           # + audio analysis (librosa, numpy, scipy)
+pip install -e '.[audio,web]'       # + the browser UI (Flask)
 ```
+
+Ask for something an extra provides without installing it and you get a message
+naming the command to run, not a traceback.
 
 Audio analysis is an optional extra because librosa is a heavy dependency and
 half the tool doesn't need it. Ask for it without installing it and you get a
@@ -365,7 +383,7 @@ left out of the progression, and marked "single notes" in the timeline.
 
 ```bash
 pip install -e '.[audio,dev]'
-pytest                  # 298 tests
+pytest                  # 308 tests
 pytest -m "not audio"   # skip the ones that synthesise audio
 pytest --collect-only -q | tail -1
 
