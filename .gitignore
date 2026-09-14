@@ -19,3 +19,4 @@ downloads/
 *.ogg
 !tests/fixtures/*.wav
 .DS_Store
+demo-audio/

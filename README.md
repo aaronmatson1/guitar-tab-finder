@@ -42,6 +42,58 @@ clutter that would otherwise wreck the search) and carries on from there.
 - **Melody transcription** — pitch-tracks a single-note riff and arranges it on
   the neck with dynamic programming, so the fretting hand stays in one place.
 
+## Try it in two minutes
+
+```bash
+git clone https://github.com/aaronmatson1/guitar-tab-finder.git
+cd guitar-tab-finder
+git checkout claude/guitar-tab-finder-agent-i1jnul
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[audio,dev]'
+```
+
+Nothing below needs the network or an audio file of your own:
+
+```bash
+# 1. Chord shapes, instantly.
+tabfinder chord Am7 F#m Bb --shapes 2
+
+# 2. Everything playable in a key.
+tabfinder key "E minor"
+
+# 3. Make some demo audio, then analyse it.
+python scripts/make_demo_audio.py
+tabfinder analyze demo-audio/four-chord-G.wav
+tabfinder analyze demo-audio/riff-Em.wav --melody
+
+# 4. Run the tests.
+pytest -q
+```
+
+The demo files come with a known right answer, so you can check the analyser
+against them:
+
+| File | Should detect |
+| --- | --- |
+| `four-chord-G.wav` | G major, `I-V-vi-IV`, no capo needed |
+| `minor-Am.wav` | A minor, `i-iv-V-i` |
+| `blues-E.wav` | E major, `I-IV` |
+| `capo-song-F.wav` | F major — and **capo 1, play E shapes** |
+| `ambiguous-AmF.wav` | C major at low confidence, with A minor offered as the alternative |
+| `riff-Em.wav` | 11 single notes tabbed in open position |
+
+That last pair is worth looking at: `Am F C G` uses exactly the notes of C
+major, so no tool can be certain which of the two it is. The report says 64%
+and names A minor as the alternative instead of picking one and sounding sure.
+
+Searching and music links need the network, so they only work from your own
+machine:
+
+```bash
+tabfinder find "Oasis - Wonderwall"
+tabfinder song https://youtu.be/6hzrDeceEKc
+```
+
 ## Install
 
 ```bash
@@ -216,6 +268,9 @@ not a full mix, or it will track whichever partial happens to be loudest.
 pip install -e '.[audio,dev]'
 pytest                  # 250 tests
 pytest -m "not audio"   # skip the ones that synthesise audio
+pytest --collect-only -q | tail -1
+
+python scripts/make_demo_audio.py --out /tmp/demo   # test audio on demand
 ```
 
 The audio tests synthesise their own plucked-string chord progressions, so the
