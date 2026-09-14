@@ -80,7 +80,7 @@ class SongAnalysis:
     @property
     def loop(self) -> List[Chord]:
         """The repeating chord loop, if the song has an obvious one."""
-        return _find_loop([segment.chord for segment in self.chords])
+        return _find_loop(self.chords)
 
     def voicings(self, board: Optional[Fretboard] = None, per_chord: int = 1) -> List[Voicing]:
         """A shape for each chord in the song's vocabulary."""
@@ -128,6 +128,7 @@ class SongAnalysis:
                     "end": round(segment.end, 2),
                     "bars": segment.beats / (self.beats.beats_per_bar if self.beats else 4),
                     "confidence": round(segment.confidence, 3),
+                    "monophonic": segment.monophonic,
                 }
                 for segment in self.chords
             ],
@@ -173,31 +174,53 @@ def suggest_capo(key: Key, max_fret: int = 7) -> CapoSuggestion:
     return best or CapoSuggestion(0, key)
 
 
-def _find_loop(chords: Sequence[Chord], max_length: int = 8) -> List[Chord]:
-    """Spot the repeating chord loop a song is built on."""
+def _find_loop(segments: Sequence["ChordSegment"], max_length: int = 8) -> List[Chord]:
+    """Spot the repeating chord loop a song is built on.
+
+    Falls back to the chords that hold the most time rather than the first
+    handful to appear. That matters because an instrumental break is a stretch
+    of single notes, and a chord recogniser reads single notes as a stream of
+    odd, short-lived chords - which would otherwise crowd out the four that
+    the song is actually built on.
+    """
+    # A monophonic stretch - a solo with no backing - yields chord labels that
+    # describe the notes of the line, not the song's harmony. Leave it out.
+    harmonic = [s for s in segments if not getattr(s, "monophonic", False)] or list(segments)
+    chords = [segment.chord for segment in harmonic]
     if len(chords) < 4:
         return list(chords)
+
     for length in range(2, max_length + 1):
         if len(chords) < length * 2:
             break
-        candidate = list(chords[:length])
+        candidate = chords[:length]
         repeats = 0
         index = 0
         while index + length <= len(chords):
-            if list(chords[index : index + length]) == candidate:
+            if chords[index : index + length] == candidate:
                 repeats += 1
                 index += length
             else:
                 break
         # Two full turns around the loop is enough to call it a loop.
         if repeats >= 2:
-            return candidate
-    # Otherwise just report the distinct chords in the order they first appear.
-    seen: List[Chord] = []
+            return list(candidate)
+
+    # No clean repetition: report the chords the song actually spends its time
+    # on, in the order they first turn up.
+    held: Dict[Chord, float] = {}
+    for segment in harmonic:
+        held[segment.chord] = held.get(segment.chord, 0.0) + segment.duration
+    total = sum(held.values()) or 1.0
+    # Anything under a twentieth of the song is noise, not part of the loop.
+    significant = {chord for chord, seconds in held.items() if seconds / total >= 0.05}
+    ranked = sorted(significant, key=lambda c: -held[c])[:max_length]
+
+    ordered: List[Chord] = []
     for chord in chords:
-        if chord not in seen:
-            seen.append(chord)
-    return seen[:max_length]
+        if chord in ranked and chord not in ordered:
+            ordered.append(chord)
+    return ordered or sorted(held, key=lambda c: -held[c])[:max_length]
 
 
 def analyze_clip(
@@ -222,7 +245,7 @@ def analyze_clip(
     audio_key = _key_from_audio(clip)
     key = combine_estimates(audio_key, chord_key)
 
-    loop = _find_loop([s.chord for s in segments])
+    loop = _find_loop(segments)
     numerals = progression_numerals(loop, key.key) if loop else []
     name = identify_progression(numerals) if numerals else None
 

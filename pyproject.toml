@@ -26,6 +26,9 @@ audio = [
   "scipy>=1.8",
   "soundfile>=0.12",
 ]
+web = [
+  "flask>=2.2",
+]
 dev = [
   "pytest>=7.0",
 ]
@@ -38,6 +41,9 @@ Homepage = "https://github.com/aaronmatson1/guitar-tab-finder"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+tabfinder = ["web/templates/*.html", "web/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

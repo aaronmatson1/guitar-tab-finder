@@ -16,6 +16,12 @@ from ..theory.chords import Chord, detection_chords
 from .audio import AudioClip, require_audio
 
 
+#: Above this, a beat's chroma energy is concentrated in too few pitch classes
+#: for anything polyphonic to be sounding - a solo or an unaccompanied line.
+#: Measured at ~0.75 for a monophonic passage against ~0.43 for strummed chords.
+MONOPHONIC_CONCENTRATION = 0.60
+
+
 @dataclass
 class ChordSegment:
     """One chord, and the stretch of the song where it sounds."""
@@ -25,6 +31,11 @@ class ChordSegment:
     end: float
     confidence: float = 0.0
     beats: int = 1
+    #: True when only one note at a time was sounding, so the chord label here
+    #: is whatever the single notes happened to imply rather than a real chord.
+    monophonic: bool = False
+    #: How many of this segment's beats looked monophonic, used to decide it.
+    mono_beats: int = 0
 
     @property
     def duration(self) -> float:
@@ -174,6 +185,10 @@ def detect_chords(
     scores = templates @ columns  # (n_chords, n_beats)
     scores = np.clip(scores, 0.0, None)
 
+    # How much of each beat's energy sits in its single loudest pitch class.
+    # A chord spreads it; one note at a time does not.
+    concentration = columns.max(axis=0) / np.clip(columns.sum(axis=0), 1e-9, None)
+
     path = _viterbi(scores, np, change_penalty=change_penalty)
 
     # Beat boundaries: the nth chroma column covers beat n to beat n+1.
@@ -187,13 +202,18 @@ def detect_chords(
     for index, state in enumerate(path):
         start, end = edges[index], edges[index + 1]
         confidence = float(scores[state, index])
+        mono = bool(concentration[index] >= MONOPHONIC_CONCENTRATION)
         if segments and segments[-1].chord == chords[state]:
             segments[-1].end = end
             segments[-1].beats += 1
             segments[-1].confidence = (segments[-1].confidence + confidence) / 2
+            segments[-1].mono_beats += int(mono)
+            # A segment counts as monophonic when most of it was.
+            segments[-1].monophonic = segments[-1].mono_beats * 2 > segments[-1].beats
         else:
             segments.append(
-                ChordSegment(chords[state], start, end, confidence=confidence, beats=1)
+                ChordSegment(chords[state], start, end, confidence=confidence, beats=1,
+                             monophonic=mono, mono_beats=int(mono))
             )
 
     return _merge_short(segments, min_duration), grid
@@ -208,19 +228,32 @@ def _merge_short(segments: List[ChordSegment], min_duration: float) -> List[Chor
         if out and segment.duration < min_duration:
             out[-1].end = segment.end
             out[-1].beats += segment.beats
+            out[-1].mono_beats += segment.mono_beats
+            out[-1].monophonic = out[-1].mono_beats * 2 > out[-1].beats
             continue
         out.append(segment)
     # A short first chord gets folded forwards instead.
     if len(out) > 1 and out[0].duration < min_duration:
         out[1].start = out[0].start
         out[1].beats += out[0].beats
+        out[1].mono_beats += out[0].mono_beats
+        out[1].monophonic = out[1].mono_beats * 2 > out[1].beats
         out.pop(0)
     return out
 
 
 def chord_histogram(segments: Sequence[ChordSegment]) -> List[Tuple[Chord, float]]:
-    """How much total time each distinct chord holds, most used first."""
+    """How much total time each distinct chord holds, most used first.
+
+    Monophonic stretches are left out: a solo over no backing produces chord
+    labels that describe the notes of the line, not the harmony of the song.
+    """
     totals: dict = {}
     for segment in segments:
+        if segment.monophonic:
+            continue
         totals[segment.chord] = totals.get(segment.chord, 0.0) + segment.duration
+    if not totals:  # the whole recording was a single line; report it anyway
+        for segment in segments:
+            totals[segment.chord] = totals.get(segment.chord, 0.0) + segment.duration
     return sorted(totals.items(), key=lambda item: -item[1])

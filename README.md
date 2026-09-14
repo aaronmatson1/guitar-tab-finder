@@ -16,6 +16,8 @@ Paste a YouTube, Spotify or Apple Music link and it takes it from there:
 resolves what the song is, looks for a tab, and works one out from the audio if
 there isn't one. A local file works just as well.
 
+Prefer a browser? `tabfinder serve --open`.
+
 ## What it does
 
 **Find** — searches Ultimate Guitar and Songsterr at once, ranks results by how
@@ -25,6 +27,10 @@ reads search listings only; tab content stays on the sites that host it.
 **Follow a link** — give it a YouTube, Spotify or Apple Music URL instead of a
 title. It resolves the track name (cleaning up the `(Official Video) [4K]`
 clutter that would otherwise wreck the search) and carries on from there.
+
+**Tab the guitar solo** — find the lead section of a song and transcribe it,
+with the technique that makes tab worth reading: bends, slides, hammer-ons,
+pull-offs and vibrato.
 
 **Analyse** — when there's no tab to find, point it at audio:
 
@@ -41,6 +47,13 @@ clutter that would otherwise wreck the search) and carries on from there.
 - **Capo suggestions** — "capo 1 and play E shapes" beats fighting an F barre.
 - **Melody transcription** — pitch-tracks a single-note riff and arranges it on
   the neck with dynamic programming, so the fretting hand stays in one place.
+- **Solo transcription** — finds the lead section, reads the technique off the
+  pitch contour, and pins legato notes to one string because that is the only
+  way they can be played:
+
+  ```
+  e|--0---3---5b7---7~---3h---5---7/---10--|
+  ```
 
 ## Try it in two minutes
 
@@ -55,18 +68,22 @@ pip install -e '.[audio,dev]'
 Nothing below needs the network or an audio file of your own:
 
 ```bash
-# 1. Chord shapes, instantly.
+# 1. The web UI - the easiest way to see everything at once.
+tabfinder serve --open
+
+# 2. Chord shapes, instantly.
 tabfinder chord Am7 F#m Bb --shapes 2
 
-# 2. Everything playable in a key.
+# 3. Everything playable in a key.
 tabfinder key "E minor"
 
-# 3. Make some demo audio, then analyse it.
+# 4. Make some demo audio, then analyse it.
 python scripts/make_demo_audio.py
 tabfinder analyze demo-audio/four-chord-G.wav
 tabfinder analyze demo-audio/riff-Em.wav --melody
+tabfinder solo demo-audio/song-with-solo.wav
 
-# 4. Run the tests.
+# 5. Run the tests.
 pytest -q
 ```
 
@@ -81,6 +98,7 @@ against them:
 | `capo-song-F.wav` | F major — and **capo 1, play E shapes** |
 | `ambiguous-AmF.wav` | C major at low confidence, with A minor offered as the alternative |
 | `riff-Em.wav` | 11 single notes tabbed in open position |
+| `song-with-solo.wav` | a solo found between the verses, with bends, vibrato, a hammer-on and a slide |
 
 That last pair is worth looking at: `Am F C G` uses exactly the notes of C
 major, so no tool can be certain which of the two it is. The report says 64%
@@ -108,6 +126,9 @@ clear message telling you what to run.
 ## Use
 
 ```bash
+# The web UI.
+tabfinder serve --open
+
 # Is there already a tab?
 tabfinder find "Oasis - Wonderwall"
 
@@ -126,6 +147,11 @@ tabfinder song https://youtu.be/dQw4w9WgXcQ --allow-download
 # Look up chord shapes, in any tuning, with or without a capo.
 tabfinder chord Am7 Cmaj7 F#m --shapes 3
 tabfinder chord D --tuning drop-d
+
+# Tab the guitar solo.
+tabfinder solo song.mp3
+tabfinder solo song.mp3 --solo-from 2:14 --solo-to 2:48   # name the section yourself
+tabfinder solo song.mp3 --demucs                          # separate the lead first
 
 # What can I play in this key?
 tabfinder key "E minor" --sevenths
@@ -210,6 +236,66 @@ E |3---3---3---3---|----------------|0---0---0---0---|----------------|
 Plus a chord-by-chord timeline with timestamps, and a fretboard map of the
 key's pentatonic scale for soloing over it.
 
+## The web UI
+
+```bash
+pip install -e '.[audio,web]'
+tabfinder serve --open
+```
+
+Everything the command line does, in a browser: search, paste a link, or drop
+an audio file on the page. Chord shapes are drawn as SVG diagrams rather than
+ASCII; tab stays monospace, the way every tab site shows it.
+
+Analysis takes tens of seconds, so it runs on a worker thread and the page
+polls for the result, reporting progress as it goes. It binds to localhost and
+has no authentication — it is a local tool, so don't expose it to a network you
+don't trust.
+
+## Tabbing a guitar solo
+
+```bash
+tabfinder solo song.mp3
+```
+
+Finding the solo runs cheap spectral features over the whole song — how
+concentrated the pitch content is, how fast it changes, how much energy sits in
+the lead register — scored against the song's own distribution. Pitch tracking
+is about six times slower than realtime, so it only runs on the section that
+wins.
+
+What comes back is tab, not a list of notes:
+
+```
+e |0------3------5b7----7~-----3h-----5------7/-----10-----|
+
+  b   bend up to the pitch shown
+  ~   vibrato
+  h   hammer-on
+  /   slide up
+```
+
+On a bend, the fret shown is the one you hold, not the pitch you arrive at.
+Notes joined by legato are pinned to a single string, since that is the only
+way a hammer-on or slide can be played.
+
+**What this can and cannot do.** Nothing here distinguishes a guitar solo from
+a sung melody — that needs a trained model, and this ships none. What it finds
+is the most prominent lead line, which during an instrumental break is the
+solo and elsewhere may well be the vocal. Candidates are ranked with
+timestamps, and `--solo-from` / `--solo-to` override the choice entirely.
+
+Of the technique, bends, slides and vibrato are read straight off the pitch
+contour and are reliable. Hammer-ons and pull-offs depend on separating a
+picked note from an unpicked one by loudness alone, which is a much weaker
+signal, so they are detected conservatively and will be under-reported — a
+missed hammer-on still plays correctly as two picked notes, while a false one
+asks for something impossible.
+
+With `demucs` installed, `--demucs` separates the lead from the mix first,
+which helps a great deal on a dense recording. It is slow and an extra
+dependency, so it stays opt-in.
+
 ## As a library
 
 ```python
@@ -230,6 +316,11 @@ print(analysis.to_dict())                     # JSON-ready
 
 for voicing in generate_voicings(parse_chord("F#m7"), limit=3):
     print(voicing.fret_string(), voicing.difficulty)
+
+# And the solo
+analysis = analyze_file("song.mp3", with_solo=True)
+for note in analysis.solo.notes:
+    print(note.midi, note.techniques())
 ```
 
 ## As an agent
@@ -259,14 +350,22 @@ changes, higher steadies the output) and `--start`/`--duration` to analyse just
 the section you care about. Every report prints the caveats alongside the
 result rather than pretending to certainty.
 
-Melody transcription is monophonic only. Point it at an isolated riff or intro,
-not a full mix, or it will track whichever partial happens to be loudest.
+Melody transcription (`--melody`) is monophonic only. Point it at an isolated
+riff or intro, not a full mix, or it will track whichever partial happens to be
+loudest. Solo transcription (`tabfinder solo`) handles a full mix better,
+because during a solo the lead usually *is* the dominant melodic line — but see
+the caveats in "Tabbing a guitar solo" above.
+
+One detail worth knowing: where only one note sounds at a time — a solo with no
+backing, or an unaccompanied intro — the chord recogniser would otherwise
+invent chords out of the notes of the line. Those stretches are detected and
+left out of the progression, and marked "single notes" in the timeline.
 
 ## Development
 
 ```bash
 pip install -e '.[audio,dev]'
-pytest                  # 250 tests
+pytest                  # 298 tests
 pytest -m "not audio"   # skip the ones that synthesise audio
 pytest --collect-only -q | tail -1
 

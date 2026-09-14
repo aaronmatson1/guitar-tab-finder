@@ -55,6 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  tabfinder song \"Some Obscure B-side\" --audio bside.wav\n"
             "  tabfinder chord Am7 Cmaj7 F#m --capo 2\n"
             "  tabfinder key \"E minor\" --sevenths\n"
+            "  tabfinder serve --open\n"
         ),
     )
     parser.add_argument("--version", action="version", version=f"tabfinder {__version__}")
@@ -173,6 +174,13 @@ def build_parser() -> argparse.ArgumentParser:
     solo.add_argument("--title", help="name to print at the top of the report")
     solo.add_argument("--timeout", type=float, default=10.0, help="network timeout in seconds")
     _add_solo_options(solo, standalone=True)
+
+    web = subparsers.add_parser("serve", help="run the web UI in a browser")
+    web.add_argument("--host", default="127.0.0.1",
+                     help="address to bind to (default: localhost only)")
+    web.add_argument("--port", type=int, default=5000, help="port to listen on")
+    web.add_argument("--open", action="store_true", help="open a browser window too")
+    web.add_argument("--debug", action="store_true", help="run Flask in debug mode")
 
     subparsers.add_parser("tunings", help="list the tunings that are available")
 
@@ -504,6 +512,26 @@ def cmd_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .web import create_app
+
+    url = f"http://{args.host}:{args.port}"
+    print(f"tabfinder web UI on {url}")
+    if args.host not in ("127.0.0.1", "localhost"):
+        print(
+            "  note: this binds beyond localhost and has no authentication.\n"
+            "  Only do this on a network you trust.",
+            file=sys.stderr,
+        )
+    if args.open:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    create_app().run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    return 0
+
+
 def cmd_tunings(_args: argparse.Namespace) -> int:
     print("Available tunings (low string first):\n")
     for name, strings in sorted(TUNINGS.items()):
@@ -518,6 +546,7 @@ COMMANDS = {
     "song": cmd_song,
     "chord": cmd_chord,
     "key": cmd_key,
+    "serve": cmd_serve,
     "tunings": cmd_tunings,
 }
 
