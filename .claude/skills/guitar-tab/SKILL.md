@@ -1,6 +1,6 @@
 ---
 name: guitar-tab
-description: Find guitar tabs for a song, or work out the key, chords and tab from audio when no tab exists. Accepts a song title, a YouTube/Spotify/Apple Music link, or a local audio file. Use when someone asks how to play a song on guitar, wants tabs or chords for a track, asks what key a song is in, or shares a music link or audio file and wants to learn to play it.
+description: Find guitar tabs for a song, work out the key and chords from audio when no tab exists, or transcribe a guitar solo with its bends, slides and hammer-ons. Accepts a song title, a YouTube/Spotify/Apple Music link, or a local audio file. Use when someone asks how to play a song on guitar, wants tabs or chords for a track, asks what key a song is in, asks for a solo to be tabbed, or shares a music link or audio file and wants to learn to play it.
 ---
 
 # Guitar tab finder
@@ -59,6 +59,40 @@ main progression hold, but the intro/bridge/outro are not covered. Offer
 If audio cannot be had at all, the error explains why and what to do; pass that
 on rather than retrying blindly.
 
+## Tabbing a guitar solo
+
+```bash
+tabfinder solo song.mp3 --json
+tabfinder solo "https://youtu.be/VIDEO_ID" --json
+tabfinder solo song.mp3 --solo-from 2:14 --solo-to 2:48   # name the section
+```
+
+`--solo` on `analyze` does the same as part of a full analysis.
+
+Read the caveats out rather than presenting the result as definitive:
+
+- It finds the most prominent **lead line**, not "the guitar solo" specifically.
+  During an instrumental break that is the solo; elsewhere it may be the vocal.
+  If the section looks wrong, `solo_candidates` in the JSON lists the runners-up
+  with timestamps, and `--solo-from` / `--solo-to` override the choice.
+- Bends, slides and vibrato are reliable. Hammer-ons and pull-offs are
+  deliberately under-reported, so their absence means nothing.
+- On a bend the fret shown is the one held, not the pitch arrived at.
+
+`--demucs` separates the lead from the mix first and helps a lot on a dense
+recording, but it is slow and needs demucs installed. Suggest it if the result
+looks noisy; don't use it by default.
+
+## The web UI
+
+```bash
+tabfinder serve --open
+```
+
+Suggest this when someone wants to see results rather than read them, or is
+going to try several songs. It does everything the CLI does, with SVG chord
+diagrams and file drag-and-drop. Local only, no authentication.
+
 ## Other useful commands
 
 ```bash
@@ -80,6 +114,12 @@ Link flags: `--allow-download`, `--no-preview`, `--keep-audio DIR`.
   chords.
 - `partial` / `source_label` say whether only a clip was analysed, and where
   the audio came from. Don't present a preview-based analysis as the whole song.
+- `solo` holds the transcribed solo; `solo_candidates` the other sections that
+  looked like a lead line.
+- A chord entry with `monophonic: true` is a stretch where only one note was
+  sounding, so the chord named there describes the line being played, not the
+  harmony. Those are already excluded from the progression - don't reintroduce
+  them.
 - `chords` is the full timeline with timestamps.
 
 ## When the chords look wrong

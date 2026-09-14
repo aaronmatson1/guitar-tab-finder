@@ -14,6 +14,7 @@ from .guitar.fretboard import TUNINGS, Fretboard
 from .report import (
     heading,
     render_analysis,
+    render_solo,
     render_chord_sheet,
     render_key_sheet,
     render_search,
@@ -49,9 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  tabfinder song https://youtu.be/6hzrDeceEKc\n"
             "  tabfinder analyze https://open.spotify.com/track/1AbCd...\n"
             "  tabfinder analyze demo.mp3 --melody\n"
+            "  tabfinder solo song.mp3\n"
+            "  tabfinder solo song.mp3 --solo-from 2:14 --solo-to 2:48\n"
             "  tabfinder song \"Some Obscure B-side\" --audio bside.wav\n"
             "  tabfinder chord Am7 Cmaj7 F#m --capo 2\n"
             "  tabfinder key \"E minor\" --sevenths\n"
+            "  tabfinder serve --open\n"
         ),
     )
     parser.add_argument("--version", action="version", version=f"tabfinder {__version__}")
@@ -129,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("--shapes", type=int, default=1, metavar="N",
                          help="chord shapes to show per chord (default 1)")
+    _add_solo_options(analyze)
 
     song = subparsers.add_parser(
         "song", parents=[common, link],
@@ -161,9 +166,70 @@ def build_parser() -> argparse.ArgumentParser:
     key_cmd.add_argument("name", nargs="+", help='e.g. "E minor", "Bb major", "C"')
     key_cmd.add_argument("--sevenths", action="store_true", help="show seventh chords")
 
+    solo = subparsers.add_parser(
+        "solo", parents=[common, link],
+        help="find the guitar solo in a song and tab it",
+    )
+    solo.add_argument("audio", help="an audio file, or a YouTube/Spotify/Apple Music link")
+    solo.add_argument("--title", help="name to print at the top of the report")
+    solo.add_argument("--timeout", type=float, default=10.0, help="network timeout in seconds")
+    _add_solo_options(solo, standalone=True)
+
+    web = subparsers.add_parser("serve", help="run the web UI in a browser")
+    web.add_argument("--host", default="127.0.0.1",
+                     help="address to bind to (default: localhost only)")
+    web.add_argument("--port", type=int, default=5000, help="port to listen on")
+    web.add_argument("--open", action="store_true", help="open a browser window too")
+    web.add_argument("--debug", action="store_true", help="run Flask in debug mode")
+
     subparsers.add_parser("tunings", help="list the tunings that are available")
 
     return parser
+
+
+def _add_solo_options(parser: argparse.ArgumentParser, standalone: bool = False) -> None:
+    """Options controlling solo detection, shared by `analyze` and `solo`."""
+    if not standalone:
+        parser.add_argument(
+            "--solo", action="store_true",
+            help="also find the guitar solo and tab it",
+        )
+    parser.add_argument(
+        "--solo-from", type=_timestamp, metavar="TIME",
+        help="start of the solo, as seconds or m:ss (skips auto-detection)",
+    )
+    parser.add_argument(
+        "--solo-to", type=_timestamp, metavar="TIME", help="end of the solo",
+    )
+    parser.add_argument(
+        "--demucs", action="store_true",
+        help="separate the lead from the mix with demucs first (much slower, much better)",
+    )
+
+
+def _timestamp(text: str) -> float:
+    """Parse ``90``, ``1:30`` or ``1:30.5`` into seconds."""
+    parts = text.strip().split(":")
+    try:
+        if len(parts) == 1:
+            return float(parts[0])
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + float(parts[1])
+    except ValueError:
+        pass
+    raise argparse.ArgumentTypeError(f"cannot read {text!r} as a time (use seconds or m:ss)")
+
+
+def _solo_range(args: argparse.Namespace):
+    """The explicit solo range, if the user gave a complete one."""
+    start, end = getattr(args, "solo_from", None), getattr(args, "solo_to", None)
+    if start is None and end is None:
+        return None
+    if start is None or end is None:
+        raise ValueError("give both --solo-from and --solo-to, or neither")
+    if end <= start:
+        raise ValueError(f"--solo-to ({end:g}s) must come after --solo-from ({start:g}s)")
+    return (start, end)
 
 
 def _board(args: argparse.Namespace) -> Fretboard:
@@ -276,6 +342,9 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             # Name the report after the track, not after the temp file it
             # happened to be downloaded to.
             title=args.title or (ref.display if ref else None),
+            with_solo=args.solo,
+            solo_range=_solo_range(args),
+            use_demucs=args.demucs,
         )
     _label_analysis(analysis, ref, audio)
     if args.json:
@@ -386,6 +455,43 @@ def cmd_chord(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_solo(args: argparse.Namespace) -> int:
+    from .analysis.pipeline import analyze_file
+
+    solo_range = _solo_range(args)
+    with ExitStack() as stack:
+        path, ref, audio = _obtain_audio(args.audio, args, stack)
+        if audio is not None:
+            print(f"analysing {audio.describe()}", file=sys.stderr)
+        if solo_range is None:
+            print("looking for the solo...", file=sys.stderr)
+        analysis = analyze_file(
+            path,
+            title=args.title or (ref.display if ref else None),
+            with_solo=True,
+            solo_range=solo_range,
+            use_demucs=args.demucs,
+        )
+    _label_analysis(analysis, ref, audio)
+
+    if args.json:
+        _emit(to_json(analysis), args, analysis.title or "solo")
+        return 0
+    if analysis.solo is None:
+        print(
+            "error: no lead line stood out clearly enough to tab.\n"
+            "Try naming the section yourself:  --solo-from 2:14 --solo-to 2:48",
+            file=sys.stderr,
+        )
+        return 1
+    _emit(
+        render_solo(analysis.solo, _board(args), analysis.solo_candidates),
+        args,
+        analysis.title or "Solo",
+    )
+    return 0
+
+
 def cmd_key(args: argparse.Namespace) -> int:
     key = parse_key(" ".join(args.name))
     board = _board(args)
@@ -406,6 +512,30 @@ def cmd_key(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .web import create_app
+
+    # Build the app first: a missing dependency should be reported, not
+    # announced as a URL that never answers.
+    app = create_app()
+
+    url = f"http://{args.host}:{args.port}"
+    print(f"tabfinder web UI on {url}")
+    if args.host not in ("127.0.0.1", "localhost"):
+        print(
+            "  note: this binds beyond localhost and has no authentication.\n"
+            "  Only do this on a network you trust.",
+            file=sys.stderr,
+        )
+    if args.open:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    return 0
+
+
 def cmd_tunings(_args: argparse.Namespace) -> int:
     print("Available tunings (low string first):\n")
     for name, strings in sorted(TUNINGS.items()):
@@ -416,9 +546,11 @@ def cmd_tunings(_args: argparse.Namespace) -> int:
 COMMANDS = {
     "find": cmd_find,
     "analyze": cmd_analyze,
+    "solo": cmd_solo,
     "song": cmd_song,
     "chord": cmd_chord,
     "key": cmd_key,
+    "serve": cmd_serve,
     "tunings": cmd_tunings,
 }
 
@@ -435,13 +567,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except (NoteParseError, ValueError, FileNotFoundError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    except Exception as exc:  # noqa: BLE001
-        from .analysis.audio import AudioUnavailable
-
-        if isinstance(exc, AudioUnavailable):
-            print(f"error: {exc}", file=sys.stderr)
-            return 3
-        raise
+    except RuntimeError as exc:
+        # Raised when an optional extra is missing - the audio stack, or Flask
+        # for the web UI. The message already says what to install.
+        print(f"error: {exc}", file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":  # pragma: no cover

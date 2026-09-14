@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>guitar-tab-finder</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎸</text></svg>">
+</head>
+<body>
+<header class="masthead">
+  <h1>guitar<span class="dim">-</span>tab<span class="dim">-</span>finder</h1>
+  <p class="tagline">Find the tab. Or work it out from the recording.</p>
+</header>
+
+<main>
+  <section class="panel search-panel">
+    <div class="field-row">
+      <input id="query" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Song name, or a YouTube / Spotify / Apple Music link">
+      <button id="go" class="primary">Find</button>
+    </div>
+
+    <div id="drop" class="dropzone">
+      <label for="file">
+        <strong>Drop an audio file here</strong>
+        <span>or click to choose &mdash; wav, mp3, flac, ogg, m4a</span>
+      </label>
+      <input id="file" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a,.aiff">
+    </div>
+
+    <details class="options">
+      <summary>Options</summary>
+      <div class="options-grid">
+        <label>Tuning
+          <select id="tuning">
+            {% for name in tunings %}
+            <option value="{{ name }}"{% if name == 'standard' %} selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Capo
+          <input id="capo" type="number" min="0" max="12" value="0">
+        </label>
+        <label class="check"><input id="solo" type="checkbox" checked> Find and tab the guitar solo</label>
+        <label class="check"><input id="melody" type="checkbox"> Transcribe a single-note riff</label>
+        <label class="check"><input id="allow_download" type="checkbox">
+          Download full audio from YouTube <span class="hint">(needs yt-dlp; otherwise a 30s preview is used)</span>
+        </label>
+      </div>
+    </details>
+  </section>
+
+  <div id="status" class="status" hidden></div>
+  <div id="error" class="error" hidden></div>
+
+  <section id="results" class="results" hidden></section>
+</main>
+
+<footer>
+  <p>Chords are worked out from audio and are a strong first draft, not a transcription.
+     Everything runs locally.</p>
+</footer>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
