@@ -39,6 +39,45 @@ class Note:
         return f"{self.name}@{self.start:.2f}s"
 
 
+@dataclass
+class PitchContour:
+    """The raw output of pitch tracking: one estimate per frame."""
+
+    times: "object"      # numpy arrays, typed loosely to keep librosa optional
+    midi: "object"
+    voiced: "object"
+    confidence: "object"
+
+    def __len__(self) -> int:  # pragma: no cover - trivial
+        return len(self.times)
+
+
+def pitch_contour(
+    clip: AudioClip,
+    fmin_midi: int = DEFAULT_FMIN_MIDI,
+    fmax_midi: int = DEFAULT_FMAX_MIDI,
+) -> PitchContour:
+    """Track pitch frame by frame with probabilistic YIN.
+
+    The continuous contour is what articulation detection reads: a bend or a
+    slide only exists in how the pitch moves *between* the notes you would
+    otherwise quantise it to.
+    """
+    librosa, _np = require_audio()
+    f0, voiced, voiced_prob = librosa.pyin(
+        clip.samples,
+        fmin=float(librosa.midi_to_hz(fmin_midi)),
+        fmax=float(librosa.midi_to_hz(fmax_midi)),
+        sr=clip.sample_rate,
+    )
+    return PitchContour(
+        times=librosa.times_like(f0, sr=clip.sample_rate),
+        midi=librosa.hz_to_midi(f0),
+        voiced=voiced,
+        confidence=voiced_prob,
+    )
+
+
 def transcribe_melody(
     clip: AudioClip,
     fmin_midi: int = DEFAULT_FMIN_MIDI,
@@ -47,16 +86,11 @@ def transcribe_melody(
     min_confidence: float = 0.5,
 ) -> List[Note]:
     """Extract a monophonic note sequence using probabilistic YIN."""
-    librosa, np = require_audio()
-    f0, voiced, voiced_prob = librosa.pyin(
-        clip.samples,
-        fmin=float(librosa.midi_to_hz(fmin_midi)),
-        fmax=float(librosa.midi_to_hz(fmax_midi)),
-        sr=clip.sample_rate,
-    )
-    times = librosa.times_like(f0, sr=clip.sample_rate)
+    _librosa, np = require_audio()
+    contour = pitch_contour(clip, fmin_midi, fmax_midi)
+    times, voiced, voiced_prob = contour.times, contour.voiced, contour.confidence
 
-    midi = librosa.hz_to_midi(f0)
+    midi = contour.midi
     notes: List[Note] = []
     current: Optional[List] = None  # [rounded_midi, start, end, [confidences]]
 

@@ -8,8 +8,10 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from .fretboard import Fretboard
 from .voicings import Voicing
 
-#: One moment in a tab: which fret to play on which string, plus a label.
-Column = Dict[int, int]
+#: One moment in a tab: what to print on which string. Usually a fret number,
+#: but a solo note carries its technique too ("7b9~" is a bent note with
+#: vibrato), so the value may be any short string.
+Column = Dict[int, object]
 
 
 @dataclass
@@ -185,6 +187,19 @@ def notes_to_columns(events: Sequence[TabEvent]) -> Tuple[List[Column], List[str
     for event in events:
         columns.append({event.string: event.fret})
         labels.append(event.label)
+    return columns, labels
+
+
+def solo_to_columns(
+    placements: Sequence["object"], notes: Sequence["object"]
+) -> Tuple[List[Column], List[str]]:
+    """Lay a transcribed solo out as tab, technique markings and all."""
+    columns: List[Column] = []
+    labels: List[str] = []
+    for placement, note in zip(placements, notes):
+        text = note.annotate(placement.fret) if hasattr(note, "annotate") else str(placement.fret)
+        columns.append({placement.string: text})
+        labels.append("")
     return columns, labels
 
 

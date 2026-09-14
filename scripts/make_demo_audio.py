@@ -97,6 +97,74 @@ def play_riff(midis: Sequence[int], note_duration: float = 0.35) -> "np.ndarray"
     return np.concatenate([pluck(midi, note_duration) for midi in midis])
 
 
+def bend_curve(midi: int, semitones: float, duration: float, hold: float = 0.55):
+    """Rise into a bend over the first part of the note, then hold it."""
+    samples = int(SAMPLE_RATE * duration)
+    rising = int(samples * (1 - hold))
+    return np.concatenate([
+        np.linspace(midi, midi + semitones, rising),
+        np.full(samples - rising, midi + semitones),
+    ])
+
+
+def vibrato_curve(midi: int, duration: float, rate: float = 6.0, depth: float = 0.35):
+    t = np.linspace(0, duration, int(SAMPLE_RATE * duration), endpoint=False)
+    return midi + depth * np.sin(2 * np.pi * rate * t)
+
+
+def glide_curve(start: int, end: int, duration: float):
+    return np.linspace(float(start), float(end), int(SAMPLE_RATE * duration))
+
+
+def flat_curve(midi: int, duration: float):
+    return np.full(int(SAMPLE_RATE * duration), float(midi))
+
+
+def voice(pitch_curve, picked: bool = True) -> "np.ndarray":
+    """Render a pitch curve as a guitar note, picked or sounded legato."""
+    samples = len(pitch_curve)
+    t = np.arange(samples) / SAMPLE_RATE
+    frequency = 440.0 * 2 ** ((pitch_curve - 69) / 12)
+    phase = np.cumsum(2 * np.pi * frequency / SAMPLE_RATE)
+    signal = np.zeros(samples)
+    for harmonic, gain in enumerate([1.0, 0.5, 0.33, 0.22, 0.15], start=1):
+        signal += gain * np.sin(harmonic * phase)
+    if picked:
+        envelope = np.exp(-1.6 * t) * (1 - np.exp(-400 * t))
+    else:
+        # Legato: the string is already ringing, so it swells rather than
+        # restarting from silence.
+        envelope = 0.32 * np.exp(-1.6 * t) * (1 + 0.45 * (1 - np.exp(-60 * t)))
+    return signal * envelope
+
+
+#: A solo in E minor pentatonic using each technique the tabber can read.
+SOLO_PHRASE = [
+    (flat_curve(64, 0.32), True),            # E4
+    (flat_curve(67, 0.32), True),            # G4
+    (bend_curve(69, 2, 0.75), True),         # A4 bent up a whole step
+    (vibrato_curve(71, 0.75), True),         # B4 with vibrato
+    (flat_curve(67, 0.28), True),            # G4
+    (flat_curve(69, 0.28), False),           # hammer-on to A4
+    (flat_curve(71, 0.45), True),            # B4
+    (glide_curve(71, 76, 0.20), False),      # slide up to E5
+    (flat_curve(76, 0.55), False),           # E5 held
+    (bend_curve(74, 2, 0.70), True),         # D5 bent
+    (vibrato_curve(71, 0.85), True),         # B4 vibrato to finish
+]
+
+
+def solo_section() -> "np.ndarray":
+    """Render the solo phrase twice."""
+    return np.concatenate([voice(curve, picked) for curve, picked in SOLO_PHRASE] * 2)
+
+
+def song_with_solo() -> "np.ndarray":
+    """Verse chords, a guitar solo, then chords again - as a song would be."""
+    verse = strum_progression(["Em", "C", "G", "D"], bpm=100)
+    return np.concatenate([verse, solo_section(), verse])
+
+
 def normalise(audio: "np.ndarray") -> "np.ndarray":
     peak = np.max(np.abs(audio))
     return (audio / peak * 0.85).astype("float32") if peak else audio.astype("float32")
@@ -120,8 +188,15 @@ def main() -> int:
     sf.write(str(riff_path), normalise(play_riff(RIFF)), SAMPLE_RATE)
     print(f"  {'riff-Em.wav':22s} single notes   expect: E minor pentatonic")
 
+    solo_path = directory / "song-with-solo.wav"
+    sf.write(str(solo_path), normalise(song_with_solo()), SAMPLE_RATE)
+    print(f"  {'song-with-solo.wav':22s} chords/solo/chords")
+    print(f"  {'':22s} expect: a solo found in the middle, with bends,")
+    print(f"  {'':22s} vibrato, a hammer-on and a slide")
+
     print(f"\nTry it:\n    tabfinder analyze {directory}/four-chord-G.wav")
     print(f"    tabfinder analyze {directory}/riff-Em.wav --melody")
+    print(f"    tabfinder solo {directory}/song-with-solo.wav")
     return 0
 
 

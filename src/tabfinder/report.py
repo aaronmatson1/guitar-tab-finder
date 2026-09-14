@@ -11,6 +11,7 @@ from .guitar.fretboard import Fretboard
 from .guitar.render import (
     TabEvent,
     chord_diagrams_row,
+    solo_to_columns,
     fretboard_map,
     notes_to_columns,
     render_tab,
@@ -138,6 +139,10 @@ def render_analysis(
         out.append("")
         out.append(render_tab(columns, board, labels, beats_per_bar=8))
 
+    # --- Solo -------------------------------------------------------------
+    if analysis.solo is not None:
+        out.append(render_solo(analysis.solo, board, analysis.solo_candidates))
+
     # --- Soloing ----------------------------------------------------------
     if show_scale:
         out.append(heading("SOLOING MAP  (pentatonic of the key, first 12 frets)"))
@@ -150,6 +155,55 @@ def render_analysis(
     out.append("  " + ACCURACY_NOTE.replace("\n", "\n  "))
     if analysis.partial:
         out.append("  " + PARTIAL_NOTE.replace("\n", "\n  "))
+    return "\n".join(out)
+
+
+def render_solo(solo, board: Optional[Fretboard] = None, candidates=None) -> str:
+    """Lay a transcribed solo out as tab, with a legend for the technique."""
+    from .analysis.articulation import technique_legend
+    from .theory.notes import midi_to_name
+
+    board = board or Fretboard.from_tuning()
+    out: List[str] = [heading(f"GUITAR SOLO  ({solo.section.label()})")]
+
+    if not solo.notes:
+        out.append("  Nothing transcribable was found in that section.")
+        return "\n".join(out)
+
+    low, high = solo.pitch_range()
+    placements = place_notes(solo.notes, board)
+    out.append(
+        f"  {solo.note_count} notes, {midi_to_name(low)}-{midi_to_name(high)}, "
+        f"{position_summary(placements)}"
+    )
+    if solo.separated:
+        out.append("  (lead separated from the mix with demucs)")
+    out.append("")
+
+    columns, labels = solo_to_columns(placements, solo.notes)
+    out.append(render_tab(columns, board, labels, beats_per_bar=8))
+
+    legend = technique_legend(solo.notes)
+    if legend:
+        out.append("")
+        out.append("  how to play the markings:")
+        out.extend(legend)
+
+    if candidates and len(candidates) > 1:
+        others = [c for c in candidates if c is not solo.section][:2]
+        if others:
+            out.append("")
+            out.append("  other sections that looked like a lead line:")
+            for other in others:
+                out.append(f"    {other.describe()}   (--solo-from {other.start:.0f} --solo-to {other.end:.0f})")
+
+    out.append("")
+    out.append(
+        "  Solo transcription is the least certain thing here: it follows the\n"
+        "  loudest melodic line, which during an instrumental break is the solo\n"
+        "  but elsewhere may be the vocal. Bends, slides and vibrato read well;\n"
+        "  hammer-ons and pull-offs are deliberately under-reported."
+    )
     return "\n".join(out)
 
 

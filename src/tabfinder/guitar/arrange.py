@@ -55,15 +55,23 @@ def _position_cost(position: Position) -> float:
     return HIGH_FRET_COST * position.fret
 
 
+#: A hammer-on, pull-off or slide only works along one string, so moving
+#: across strings for a tied note has to cost more than any hand movement.
+TIED_STRING_PENALTY = 25.0
+
+
 def arrange_notes(
     midis: Sequence[int],
     board: Optional[Fretboard] = None,
     prefer_position: Optional[int] = None,
+    tied: Optional[Sequence[bool]] = None,
 ) -> List[Tuple[int, int]]:
     """Pick a ``(string, fret)`` for each note, keeping the hand in one place.
 
     Returns one pair per input note. Notes that do not exist on the neck are
-    moved by whole octaves until they fit.
+    moved by whole octaves until they fit. ``tied[i]`` marks a note that must
+    be played on the same string as the note before it, which is what a
+    hammer-on, pull-off or slide physically requires.
     """
     board = board or Fretboard.from_tuning()
     if not midis:
@@ -98,9 +106,12 @@ def arrange_notes(
             best_cost = float("inf")
             best_index = 0
             best_anchor = float(position.fret)
+            must_tie = bool(tied[step - 1]) if tied is not None and step - 1 < len(tied) else False
             for index, previous in enumerate(options[step - 1]):
                 anchor = anchors[index]
                 total = costs[index] + _transition_cost(previous, position, anchor)
+                if must_tie and previous.string != position.string:
+                    total += TIED_STRING_PENALTY
                 if total < best_cost:
                     best_cost = total
                     best_index = index
@@ -140,10 +151,15 @@ def place_notes(
     board: Optional[Fretboard] = None,
     prefer_position: Optional[int] = None,
 ) -> List[PlacedNote]:
-    """Arrange transcribed notes onto the neck, keeping their timings."""
+    """Arrange transcribed notes onto the neck, keeping their timings.
+
+    Notes carrying a legato ``link`` are kept on one string, since that is the
+    only way a hammer-on, pull-off or slide can actually be played.
+    """
     board = board or Fretboard.from_tuning()
     midis = [int(getattr(note, "midi")) for note in notes]
-    placements = arrange_notes(midis, board, prefer_position=prefer_position)
+    tied = [bool(getattr(note, "legato", False)) for note in notes]
+    placements = arrange_notes(midis, board, prefer_position=prefer_position, tied=tied)
     out: List[PlacedNote] = []
     for note, (string, fret) in zip(notes, placements):
         out.append(

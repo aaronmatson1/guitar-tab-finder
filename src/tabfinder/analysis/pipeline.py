@@ -67,6 +67,10 @@ class SongAnalysis:
     source_label: Optional[str] = None
     #: True when only a clip of the song was analysed, not the whole thing.
     partial: bool = False
+    #: A tabbed guitar solo, when one was asked for and found.
+    solo: Optional["object"] = None
+    #: Other stretches that looked like a lead line, for the user to choose from.
+    solo_candidates: List["object"] = field(default_factory=list)
 
     @property
     def chord_vocabulary(self) -> List[Tuple[Chord, float]]:
@@ -140,6 +144,12 @@ class SongAnalysis:
                 }
                 for note in self.melody
             ],
+            "solo": self.solo.to_dict() if self.solo else None,
+            "solo_candidates": [
+                {"start": round(s.start, 2), "end": round(s.end, 2),
+                 "confidence": round(s.score, 3)}
+                for s in self.solo_candidates
+            ],
         }
 
 
@@ -196,6 +206,9 @@ def analyze_clip(
     change_penalty: float = 3.0,
     with_melody: bool = False,
     title: Optional[str] = None,
+    with_solo: bool = False,
+    solo_range: Optional[Tuple[float, float]] = None,
+    use_demucs: bool = False,
 ) -> SongAnalysis:
     """Run the full analysis over already-loaded audio."""
     grid = beat_track(clip, beats_per_bar=beats_per_bar)
@@ -217,6 +230,19 @@ def analyze_clip(
     if with_melody:
         melody = transcribe_melody(clip)
 
+    solo = None
+    candidates: List[object] = []
+    if with_solo or solo_range is not None:
+        from .solo import LeadSection, find_lead_sections, transcribe_solo
+
+        if solo_range is not None:
+            section = LeadSection(solo_range[0], solo_range[1], 1.0)
+        else:
+            candidates = find_lead_sections(clip)
+            section = candidates[0] if candidates else None
+        if section is not None:
+            solo = transcribe_solo(clip, section, key=key.key, use_demucs=use_demucs)
+
     return SongAnalysis(
         source=clip.path,
         duration=clip.duration,
@@ -229,6 +255,8 @@ def analyze_clip(
         progression_name=name,
         numerals=numerals,
         title=title,
+        solo=solo,
+        solo_candidates=candidates,
     )
 
 
@@ -256,14 +284,19 @@ def analyze_file(
     with_melody: bool = False,
     sample_rate: int = 22050,
     title: Optional[str] = None,
+    with_solo: bool = False,
+    solo_range: Optional[Tuple[float, float]] = None,
+    use_demucs: bool = False,
 ) -> SongAnalysis:
     """Analyse an audio file from disk."""
     clip = load_audio(path, sample_rate=sample_rate, offset=offset, duration=duration)
-    analysis = analyze_clip(
+    return analyze_clip(
         clip,
         beats_per_bar=beats_per_bar,
         change_penalty=change_penalty,
         with_melody=with_melody,
         title=title or Path(path).stem,
+        with_solo=with_solo,
+        solo_range=solo_range,
+        use_demucs=use_demucs,
     )
-    return analysis
