@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guitar-tab-finder"
+version = "0.1.0"
+description = "Find guitar tabs for a song, or work them out from the audio when nobody has tabbed it."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Aaron Matson" }]
+keywords = ["guitar", "tab", "tablature", "music", "chord", "key-detection", "transcription"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+  "requests>=2.28",
+]
+
+[project.optional-dependencies]
+audio = [
+  "librosa>=0.10",
+  "numpy>=1.22",
+  "scipy>=1.8",
+  "soundfile>=0.12",
+]
+dev = [
+  "pytest>=7.0",
+]
+
+[project.scripts]
+tabfinder = "tabfinder.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/aaronmatson1/guitar-tab-finder"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
