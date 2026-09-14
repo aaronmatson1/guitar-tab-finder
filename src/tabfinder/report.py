@@ -31,6 +31,11 @@ ACCURACY_NOTE = (
     "  • if a chord sounds wrong, try its relative minor/major or a sus chord"
 )
 
+PARTIAL_NOTE = (
+    "  \u2022 this was a short preview clip, usually taken from the middle of the\n"
+    "    song, so an intro, bridge or outro will be missing entirely"
+)
+
 
 def heading(text: str) -> str:
     return f"\n{text}\n{RULE}"
@@ -58,6 +63,13 @@ def render_analysis(
         f"tempo {analysis.tempo:.0f} BPM   "
         f"tuning {board.describe()}"
     )
+    if analysis.source_label:
+        out.append(f"  source {analysis.source_label}")
+    if analysis.partial:
+        out.append(
+            "  NOTE  this is a clip, not the whole song \u2014 the key and the\n"
+            "        main progression should hold, but later sections are not covered."
+        )
 
     # --- Key -------------------------------------------------------------
     out.append(heading("KEY"))
@@ -136,6 +148,8 @@ def render_analysis(
 
     out.append(heading("A NOTE ON ACCURACY"))
     out.append("  " + ACCURACY_NOTE.replace("\n", "\n  "))
+    if analysis.partial:
+        out.append("  " + PARTIAL_NOTE.replace("\n", "\n  "))
     return "\n".join(out)
 
 
@@ -198,8 +212,13 @@ def render_key_sheet(key, board: Optional[Fretboard] = None, sevenths: bool = Fa
 
 
 def render_search(outcome: SearchOutcome, query: str, limit: int = 10,
-                  links: Optional[Sequence[TabResult]] = None) -> str:
-    """List published tabs, and say plainly when a source failed."""
+                  links: Optional[Sequence[TabResult]] = None,
+                  suggest_analysis: bool = True) -> str:
+    """List published tabs, and say plainly when a source failed.
+
+    ``suggest_analysis`` is turned off by callers that are about to analyse the
+    audio anyway, so the report does not suggest a step it is already taking.
+    """
     out: List[str] = [f"Tabs for: {query}", RULE]
     results = outcome.ranked(query, limit=limit)
     if results:
@@ -219,7 +238,7 @@ def render_search(outcome: SearchOutcome, query: str, limit: int = 10,
         for link in links:
             out.append(f"  {link.source:<18} {link.url}")
 
-    if not results:
+    if not results and suggest_analysis:
         out.append(heading("NOTHING OUT THERE?"))
         out.append(
             "  If nobody has tabbed this song, work it out from the recording:\n"

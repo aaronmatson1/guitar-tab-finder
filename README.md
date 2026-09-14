@@ -9,14 +9,22 @@ phone: it finds the key, tracks the chord progression, and hands you playable
 chord shapes and tab.
 
 ```
-$ tabfinder song "Some Obscure B-Side" --audio bside.mp3
+$ tabfinder song https://youtu.be/dQw4w9WgXcQ
 ```
+
+Paste a YouTube, Spotify or Apple Music link and it takes it from there:
+resolves what the song is, looks for a tab, and works one out from the audio if
+there isn't one. A local file works just as well.
 
 ## What it does
 
 **Find** — searches Ultimate Guitar and Songsterr at once, ranks results by how
 well they match and how the host site's own users rated them, and links out. It
 reads search listings only; tab content stays on the sites that host it.
+
+**Follow a link** — give it a YouTube, Spotify or Apple Music URL instead of a
+title. It resolves the track name (cleaning up the `(Official Video) [4K]`
+clutter that would otherwise wreck the search) and carries on from there.
 
 **Analyse** — when there's no tab to find, point it at audio:
 
@@ -51,11 +59,17 @@ clear message telling you what to run.
 # Is there already a tab?
 tabfinder find "Oasis - Wonderwall"
 
-# There isn't. Work it out from the recording.
-tabfinder analyze bside.mp3
+# Just paste a link — it works out the rest.
+tabfinder song https://youtu.be/dQw4w9WgXcQ
+tabfinder song "https://open.spotify.com/track/7ygpwy2qP3NbrxVkHvUhXY"
+tabfinder analyze "https://music.apple.com/us/album/x/1440830900?i=1440831165"
 
-# Do both: search, and analyse the audio if the search comes up empty.
+# Or point it at audio you already have.
+tabfinder analyze bside.mp3
 tabfinder song "Some Obscure B-Side" --audio bside.mp3
+
+# Pull the full track off a video rather than using a 30-second preview.
+tabfinder song https://youtu.be/dQw4w9WgXcQ --allow-download
 
 # Look up chord shapes, in any tuning, with or without a capo.
 tabfinder chord Am7 Cmaj7 F#m --shapes 3
@@ -68,7 +82,39 @@ tabfinder tunings
 ```
 
 Every command takes `--json` (for piping into something else), `--markdown`,
-and `--out FILE`.
+and `--out FILE`. Link-aware commands also take `--allow-download`,
+`--no-preview` and `--keep-audio DIR`.
+
+## What each service can actually give you
+
+This is the part worth understanding, because it decides what you get:
+
+| Service | Track name | Audio |
+| --- | --- | --- |
+| **YouTube** | public oEmbed, no API key | full track, via `yt-dlp`, opt-in with `--allow-download` |
+| **Apple Music** | public iTunes API, no key | 30-second preview clip |
+| **Spotify** | public oEmbed + page metadata | **none** — the streams are DRM-protected |
+
+Spotify will never hand over audio, and this tool does not try to make it. What
+it does instead: resolve the track name from the link, then look the same song
+up on iTunes and use *its* preview clip. So a Spotify link still ends in a real
+analysis, without going anywhere near the DRM.
+
+A 30-second preview is usually lifted from the middle of a song. That is
+normally enough to pin down the key and the main chord loop, but an intro,
+bridge or outro simply isn't in it — so the report says clearly when it only
+had a clip. For the whole song, use `--allow-download` on a YouTube link, or
+supply a file yourself.
+
+`--allow-download` shells out to [yt-dlp](https://github.com/yt-dlp/yt-dlp),
+which you install separately (`pip install yt-dlp`). It is off by default, and
+whether you have the right to download a given video is your call, not the
+tool's.
+
+**ffmpeg**: preview clips are AAC, which libsndfile can't read, so decoding
+them needs `ffmpeg` on your PATH. Local wav, mp3, flac and ogg files need
+nothing extra. If ffmpeg is missing you get a message saying so rather than a
+confusing decoder error.
 
 ### What the output looks like
 
@@ -116,9 +162,13 @@ key's pentatonic scale for soloing over it.
 
 ```python
 from tabfinder import search_tabs, analyze_file, parse_chord, generate_voicings
+from tabfinder.sources import resolve_track, acquire_audio
 
-outcome = search_tabs("Oasis - Wonderwall")
-for result in outcome.ranked("Oasis - Wonderwall"):
+ref = resolve_track("https://youtu.be/dQw4w9WgXcQ")
+print(ref.artist, ref.title, ref.query)     # "Oasis - Wonderwall"
+
+outcome = search_tabs(ref.query)
+for result in outcome.ranked(ref.query):
     print(result.describe(), result.url)
 
 analysis = analyze_file("bside.mp3")          # needs the [audio] extra
@@ -164,7 +214,7 @@ not a full mix, or it will track whichever partial happens to be loudest.
 
 ```bash
 pip install -e '.[audio,dev]'
-pytest                  # 185 tests
+pytest                  # 250 tests
 pytest -m "not audio"   # skip the ones that synthesise audio
 ```
 
@@ -179,8 +229,11 @@ that source reads the JSON its own search page embeds; if the page layout
 changes, that source returns nothing and the rest of the search carries on. The
 `links` fallback never touches the network at all.
 
-For analysis, supply your own audio — a file you own, recorded, or otherwise
-have the right to use.
+For analysis: preview clips come from the public iTunes API, which serves them
+for exactly this kind of use. Full downloads happen only behind
+`--allow-download`, only via yt-dlp, and only on links you point it at — having
+the right to do that is your call. No DRM is circumvented anywhere; Spotify
+audio is simply never fetched.
 
 ## Licence
 

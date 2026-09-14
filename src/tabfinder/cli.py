@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import ExitStack
 from pathlib import Path
-from typing import List, Optional, Sequence
+from tempfile import TemporaryDirectory
+from typing import List, Optional, Sequence, Tuple
 
 from . import __version__
 from .guitar.fretboard import TUNINGS, Fretboard
 from .report import (
+    heading,
     render_analysis,
     render_chord_sheet,
     render_key_sheet,
@@ -19,6 +22,15 @@ from .report import (
     wrap_markdown,
 )
 from .search import SOURCES, search_links, search_tabs
+from .sources import (
+    AudioPolicy,
+    AudioSource,
+    SourceError,
+    TrackRef,
+    acquire_audio,
+    is_url,
+    resolve_track,
+)
 from .theory.notes import NoteParseError, pitch_class
 from .theory.scales import Key
 
@@ -34,6 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  tabfinder find \"Oasis - Wonderwall\"\n"
+            "  tabfinder song https://youtu.be/6hzrDeceEKc\n"
+            "  tabfinder analyze https://open.spotify.com/track/1AbCd...\n"
             "  tabfinder analyze demo.mp3 --melody\n"
             "  tabfinder song \"Some Obscure B-side\" --audio bside.wav\n"
             "  tabfinder chord Am7 Cmaj7 F#m --capo 2\n"
@@ -52,12 +66,32 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--markdown", action="store_true", help="wrap the report in Markdown")
     common.add_argument("--out", metavar="FILE", help="write the report to a file")
 
+    link = argparse.ArgumentParser(add_help=False)
+    link.add_argument(
+        "--allow-download", action="store_true",
+        help=(
+            "allow fetching full audio from a video link with yt-dlp; you are "
+            "responsible for having the right to do so"
+        ),
+    )
+    link.add_argument(
+        "--no-preview", action="store_true",
+        help="do not fall back to a 30-second preview clip",
+    )
+    link.add_argument(
+        "--keep-audio", metavar="DIR",
+        help="keep downloaded audio in DIR instead of a temporary folder",
+    )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     find = subparsers.add_parser(
         "find", parents=[common], help="search for published tabs"
     )
-    find.add_argument("query", nargs="+", help='song to look for, e.g. "Oasis - Wonderwall"')
+    find.add_argument(
+        "query", nargs="+",
+        help='song to look for, e.g. "Oasis - Wonderwall", or a music link',
+    )
     find.add_argument("--limit", type=int, default=10, help="how many results to show")
     find.add_argument(
         "--source", action="append", choices=sorted(SOURCES),
@@ -66,9 +100,19 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("--timeout", type=float, default=8.0, help="per-source timeout in seconds")
 
     analyze = subparsers.add_parser(
-        "analyze", parents=[common], help="work out the key, chords and tab from audio"
+        "analyze", parents=[common, link],
+        help="work out the key, chords and tab from audio or a music link",
     )
-    analyze.add_argument("audio", help="path to an audio file (wav, mp3, flac, ogg, m4a)")
+    analyze.add_argument(
+        "audio",
+        help=(
+            "an audio file (wav, mp3, flac, ogg, m4a) or a YouTube, Spotify or "
+            "Apple Music link"
+        ),
+    )
+    analyze.add_argument(
+        "--timeout", type=float, default=10.0, help="network timeout in seconds"
+    )
     analyze.add_argument("--title", help="name to print at the top of the report")
     analyze.add_argument("--start", type=float, default=0.0, metavar="SEC", help="skip to this point")
     analyze.add_argument("--duration", type=float, metavar="SEC", help="analyse only this many seconds")
@@ -87,10 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
                          help="chord shapes to show per chord (default 1)")
 
     song = subparsers.add_parser(
-        "song", parents=[common],
+        "song", parents=[common, link],
         help="search for a tab, and fall back to analysing audio if there is none",
     )
-    song.add_argument("query", nargs="+", help="song title, ideally with the artist")
+    song.add_argument(
+        "query", nargs="+",
+        help=(
+            "a song title (ideally with the artist), or a YouTube, Spotify or "
+            "Apple Music link"
+        ),
+    )
     song.add_argument("--audio", help="audio to analyse if no tab turns up")
     song.add_argument("--limit", type=int, default=5, help="how many search results to show")
     song.add_argument("--timeout", type=float, default=8.0, help="per-source timeout in seconds")
@@ -155,8 +205,51 @@ def parse_key(text: str) -> Key:
     return Key(pitch_class(tonic_text), mode)
 
 
+def _audio_policy(args: argparse.Namespace) -> AudioPolicy:
+    return AudioPolicy(
+        allow_preview=not getattr(args, "no_preview", False),
+        allow_download=getattr(args, "allow_download", False),
+        timeout=getattr(args, "timeout", 10.0),
+    )
+
+
+def _obtain_audio(
+    source: str, args: argparse.Namespace, stack: ExitStack
+) -> Tuple[str, Optional[TrackRef], Optional[AudioSource]]:
+    """Resolve a path or a music link into a local audio file.
+
+    A plain path is used as-is. A link is resolved to a track, then to the best
+    audio the policy allows; downloads land in a temporary folder that is
+    cleaned up when ``stack`` closes, unless ``--keep-audio`` says otherwise.
+    """
+    if not is_url(source):
+        return source, None, None
+
+    ref = resolve_track(source, timeout=getattr(args, "timeout", 10.0))
+    if getattr(args, "keep_audio", None):
+        directory = Path(args.keep_audio)
+        directory.mkdir(parents=True, exist_ok=True)
+    else:
+        directory = Path(stack.enter_context(TemporaryDirectory(prefix="tabfinder-")))
+    audio = acquire_audio(ref, directory, _audio_policy(args))
+    return str(audio.path), ref, audio
+
+
+def _label_analysis(analysis, ref: Optional[TrackRef], audio: Optional[AudioSource]) -> None:
+    """Record on the analysis where its audio came from."""
+    if ref is not None and not analysis.title:
+        analysis.title = ref.display
+    if audio is not None:
+        analysis.source_label = audio.describe()
+        analysis.partial = audio.is_preview
+
+
 def cmd_find(args: argparse.Namespace) -> int:
     query = " ".join(args.query)
+    if is_url(query):
+        ref = resolve_track(query, timeout=args.timeout)
+        print(f"link resolves to: {ref.display}\n", file=sys.stderr)
+        query = ref.query
     outcome = search_tabs(query, sources=args.source, limit=args.limit, timeout=args.timeout)
     if args.json:
         _emit(to_json(search_to_dict(outcome, query, limit=args.limit)), args, query)
@@ -169,15 +262,22 @@ def cmd_find(args: argparse.Namespace) -> int:
 def cmd_analyze(args: argparse.Namespace) -> int:
     from .analysis.pipeline import analyze_file
 
-    analysis = analyze_file(
-        args.audio,
-        offset=args.start,
-        duration=args.duration,
-        beats_per_bar=args.beats_per_bar,
-        change_penalty=args.sensitivity,
-        with_melody=args.melody,
-        title=args.title,
-    )
+    with ExitStack() as stack:
+        path, ref, audio = _obtain_audio(args.audio, args, stack)
+        if audio is not None:
+            print(f"analysing {audio.describe()}", file=sys.stderr)
+        analysis = analyze_file(
+            path,
+            offset=args.start,
+            duration=args.duration,
+            beats_per_bar=args.beats_per_bar,
+            change_penalty=args.sensitivity,
+            with_melody=args.melody,
+            # Name the report after the track, not after the temp file it
+            # happened to be downloaded to.
+            title=args.title or (ref.display if ref else None),
+        )
+    _label_analysis(analysis, ref, audio)
     if args.json:
         _emit(to_json(analysis), args, analysis.title or "analysis")
         return 0
@@ -191,17 +291,46 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def cmd_song(args: argparse.Namespace) -> int:
-    query = " ".join(args.query)
-    outcome = search_tabs(query, limit=args.limit, timeout=args.timeout)
-    sections: List[str] = []
-    links = search_links(query) if not outcome.found else None
-    sections.append(render_search(outcome, query, limit=args.limit, links=links))
+    given = " ".join(args.query)
+    ref: Optional[TrackRef] = None
+    query = given
 
-    should_analyze = bool(args.audio) and (args.always_analyze or not outcome.found)
+    # A link tells us both what to search for and where to get audio.
+    if is_url(given):
+        ref = resolve_track(given, timeout=args.timeout)
+        query = ref.query
+        print(f"link resolves to: {ref.display}\n", file=sys.stderr)
+
+    outcome = search_tabs(query, limit=args.limit, timeout=args.timeout)
+    links = search_links(query) if not outcome.found else None
+
+    # Analyse when asked to, or when the search came up empty and we have a
+    # way to get the audio.
+    have_audio_source = bool(args.audio) or ref is not None
+    should_analyze = have_audio_source and (args.always_analyze or not outcome.found)
+
+    sections: List[str] = [
+        render_search(
+            outcome, query, limit=args.limit, links=links,
+            suggest_analysis=not should_analyze,
+        )
+    ]
     if should_analyze:
         from .analysis.pipeline import analyze_file
 
-        analysis = analyze_file(args.audio, with_melody=args.melody, title=query)
+        with ExitStack() as stack:
+            source = args.audio or given
+            try:
+                path, audio_ref, audio = _obtain_audio(source, args, stack)
+            except SourceError as exc:
+                sections.append(heading("COULD NOT ANALYSE THE AUDIO"))
+                sections.append("  " + str(exc).replace("\n", "\n  "))
+                _emit("\n".join(sections), args, query)
+                return 1
+            if audio is not None:
+                print(f"analysing {audio.describe()}", file=sys.stderr)
+            analysis = analyze_file(path, with_melody=args.melody, title=query)
+        _label_analysis(analysis, audio_ref or ref, audio)
         board = _board(args)
         if args.json:
             payload = {
@@ -215,10 +344,10 @@ def cmd_song(args: argparse.Namespace) -> int:
     elif args.json:
         _emit(to_json(search_to_dict(outcome, query, limit=args.limit)), args, query)
         return 0
-    elif not outcome.found and not args.audio:
+    elif not outcome.found:
         sections.append(
-            "\n  Tip: point --audio at a recording of the song and this will work "
-            "out\n  the key and chords for you."
+            "\n  Tip: pass a YouTube, Spotify or Apple Music link (or --audio with a\n"
+            "  local file) and this will work out the key and chords for you."
         )
 
     _emit("\n".join(sections), args, query)
@@ -303,7 +432,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except KeyboardInterrupt:  # pragma: no cover
         print("\ninterrupted", file=sys.stderr)
         return 130
-    except (NoteParseError, ValueError, FileNotFoundError) as exc:
+    except (NoteParseError, ValueError, FileNotFoundError, SourceError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:  # noqa: BLE001

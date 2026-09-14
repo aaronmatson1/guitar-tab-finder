@@ -1,25 +1,30 @@
 ---
 name: guitar-tab
-description: Find guitar tabs for a song, or work out the key, chords and tab from an audio file when no tab exists. Use when someone asks how to play a song on guitar, wants tabs or chords for a track, asks what key a song is in, or points at an audio file and wants to learn to play it.
+description: Find guitar tabs for a song, or work out the key, chords and tab from audio when no tab exists. Accepts a song title, a YouTube/Spotify/Apple Music link, or a local audio file. Use when someone asks how to play a song on guitar, wants tabs or chords for a track, asks what key a song is in, or shares a music link or audio file and wants to learn to play it.
 ---
 
 # Guitar tab finder
 
 Two paths. Pick based on what the user gave you.
 
-## They named a song
+## They named a song, or pasted a link
 
 ```bash
 tabfinder find "Artist - Title" --json
+tabfinder find "https://youtu.be/VIDEO_ID" --json
 ```
+
+Links (YouTube, Spotify, Apple Music) work anywhere a title does — the tool
+resolves the track name itself. Don't try to guess the song from the URL.
 
 Exit code 0 means tabs were found; 1 means the search worked but found nothing.
 Report the top two or three with their links — don't dump all ten.
 
-## They gave you audio (or the search found nothing)
+## They gave you audio or a link (or the search found nothing)
 
 ```bash
 tabfinder analyze path/to/song.mp3 --json
+tabfinder analyze "https://open.spotify.com/track/ID" --json
 ```
 
 Add `--melody` only for an isolated riff or intro; it is monophonic and will
@@ -28,14 +33,31 @@ produce nonsense on a full mix.
 For the human-readable tab sheet (chord diagrams, rhythm tab, timeline), drop
 `--json`. That output is meant to be shown as-is — it is already formatted.
 
-## Both at once
+## Both at once — the usual best choice for a link
 
 ```bash
+tabfinder song "https://youtu.be/VIDEO_ID" --json
 tabfinder song "Title" --audio file.mp3 --json
 ```
 
 Searches first, analyses the audio only if nothing turns up. Add
 `--always-analyze` to do both regardless.
+
+## What a link can and cannot give you
+
+- **YouTube** — name always; full audio only with `--allow-download` (needs
+  `yt-dlp` installed).
+- **Apple Music** — name and a 30-second preview clip.
+- **Spotify** — name only. The audio is DRM-protected and is never available.
+  The tool automatically falls back to the same song's iTunes preview clip.
+
+So by default an analysis from a link usually runs on a **30-second preview**.
+Check `analysis.partial` in the JSON: when it is `true`, say so — the key and
+main progression hold, but the intro/bridge/outro are not covered. Offer
+`--allow-download` (YouTube only) or a local file if they want the whole song.
+
+If audio cannot be had at all, the error explains why and what to do; pass that
+on rather than retrying blindly.
 
 ## Other useful commands
 
@@ -46,6 +68,7 @@ tabfinder tunings                       # list tunings
 ```
 
 Global flags: `--tuning`, `--capo`, `--json`, `--markdown`, `--out FILE`.
+Link flags: `--allow-download`, `--no-preview`, `--keep-audio DIR`.
 
 ## Reading the analysis JSON
 
@@ -55,6 +78,8 @@ Global flags: `--tuning`, `--capo`, `--json`, `--markdown`, `--out FILE`.
   in roman numerals, and `progression.name` names it when it's a well-known one.
 - `capo` is worth passing on — it often turns a barre-chord song into open
   chords.
+- `partial` / `source_label` say whether only a clip was analysed, and where
+  the audio came from. Don't present a preview-based analysis as the whole song.
 - `chords` is the full timeline with timestamps.
 
 ## When the chords look wrong

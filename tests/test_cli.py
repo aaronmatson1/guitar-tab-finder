@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,20 @@ from tabfinder.cli import main, parse_key
 from tabfinder.search import SOURCES
 from tabfinder.search.base import TabResult
 from tabfinder.theory.scales import Key
+
+
+@pytest.fixture(scope="module")
+def wav_file(tmp_path_factory):
+    """A short synthetic progression on disk, for the link tests to analyse."""
+    pytest.importorskip("librosa")
+    np = pytest.importorskip("numpy")
+    soundfile = pytest.importorskip("soundfile")
+    from conftest import SHAPES, synth_progression
+
+    audio = synth_progression(np, [SHAPES[n] for n in ["G", "D", "Em", "C"]], bpm=100)
+    path = tmp_path_factory.mktemp("audio") / "clip.wav"
+    soundfile.write(str(path), audio, 22050)
+    return path
 
 
 @pytest.fixture
@@ -162,3 +177,104 @@ def test_missing_audio_file_is_reported(capsys):
 def test_unknown_tuning_is_reported(capsys):
     assert main(["chord", "C", "--tuning", "klingon"]) == 2
     assert "unknown tuning" in capsys.readouterr().err
+
+
+# --- music links ---------------------------------------------------------
+
+
+@pytest.fixture
+def stub_link(monkeypatch, tmp_path):
+    """Make a link resolve to a known track, with audio already on disk."""
+    import tabfinder.cli as cli
+    from tabfinder.sources import AudioSource
+    from tabfinder.sources.refs import TrackRef
+
+    def install(audio_path=None, kind="preview", title="Wonderwall", artist="Oasis"):
+        ref = TrackRef("youtube", "https://youtu.be/abc", "abc", title, artist)
+        monkeypatch.setattr(cli, "resolve_track", lambda url, timeout=10.0: ref)
+        if audio_path is not None:
+            source = AudioSource(
+                path=Path(audio_path), kind=kind, origin="Apple Music", seconds=30.0
+            )
+            monkeypatch.setattr(
+                cli, "acquire_audio", lambda r, directory, policy=None: source
+            )
+        return ref
+
+    return install
+
+
+def test_find_accepts_a_link(offline, stub_link, capsys):
+    stub_link()
+    offline([TabResult("Wonderwall", "Oasis", "https://x/1", "Songsterr")])
+    assert main(["find", "https://youtu.be/abc"]) == 0
+    captured = capsys.readouterr()
+    assert "link resolves to: Wonderwall — Oasis" in captured.err
+    assert "https://x/1" in captured.out
+
+
+def test_song_with_a_link_searches_by_the_resolved_name(offline, stub_link, capsys):
+    stub_link()
+    offline([TabResult("Wonderwall", "Oasis", "https://x/1", "Songsterr")])
+    assert main(["song", "https://youtu.be/abc"]) == 0
+    out = capsys.readouterr().out
+    assert "Tabs for: Oasis - Wonderwall" in out
+    assert "https://x/1" in out
+
+
+def test_song_with_a_link_analyses_when_no_tab_is_found(offline, stub_link, wav_file, capsys):
+    stub_link(audio_path=wav_file)
+    offline([])
+    assert main(["song", "https://youtu.be/abc"]) == 0
+    out = capsys.readouterr().out
+    assert "No published tabs found" in out
+    assert "KEY" in out and "CHORD SHAPES" in out
+
+
+def test_analyze_accepts_a_link_and_flags_a_preview(stub_link, wav_file, capsys):
+    stub_link(audio_path=wav_file)
+    assert main(["analyze", "https://youtu.be/abc"]) == 0
+    out = capsys.readouterr().out
+    assert "source 30s preview clip from Apple Music" in out
+    assert "this is a clip, not the whole song" in out
+    assert "preview clip" in out  # and again in the accuracy notes
+
+
+def test_analyze_link_json_records_provenance(stub_link, wav_file, capsys):
+    stub_link(audio_path=wav_file)
+    assert main(["analyze", "https://youtu.be/abc", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["partial"] is True
+    assert "Apple Music" in payload["source_label"]
+    assert payload["title"] == "Wonderwall — Oasis"
+
+
+def test_full_audio_is_not_flagged_as_partial(stub_link, wav_file, capsys):
+    stub_link(audio_path=wav_file, kind="full")
+    assert main(["analyze", "https://youtu.be/abc", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["partial"] is False
+
+
+def test_song_reports_when_audio_cannot_be_had(offline, monkeypatch, capsys):
+    import tabfinder.cli as cli
+    from tabfinder.sources import AudioNotAvailable
+    from tabfinder.sources.refs import TrackRef
+
+    ref = TrackRef("spotify", "https://open.spotify.com/track/x", "x", "Obscure", "Nobody")
+    monkeypatch.setattr(cli, "resolve_track", lambda url, timeout=10.0: ref)
+
+    def no_audio(r, directory, policy=None):
+        raise AudioNotAvailable("Spotify streams are DRM-protected")
+
+    monkeypatch.setattr(cli, "acquire_audio", no_audio)
+    offline([])
+    assert main(["song", "https://open.spotify.com/track/x"]) == 1
+    out = capsys.readouterr().out
+    assert "COULD NOT ANALYSE THE AUDIO" in out
+    assert "DRM" in out
+
+
+def test_a_bad_link_is_a_clean_error(capsys):
+    assert main(["find", "https://example.com/not-music"]) == 2
+    assert "unsupported link" in capsys.readouterr().err

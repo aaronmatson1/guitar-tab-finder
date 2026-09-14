@@ -63,6 +63,10 @@ class SongAnalysis:
     progression_name: Optional[str] = None
     numerals: List[str] = field(default_factory=list)
     title: Optional[str] = None
+    #: Where the audio came from, when it was not a local file.
+    source_label: Optional[str] = None
+    #: True when only a clip of the song was analysed, not the whole thing.
+    partial: bool = False
 
     @property
     def chord_vocabulary(self) -> List[Tuple[Chord, float]]:
@@ -87,6 +91,8 @@ class SongAnalysis:
         return {
             "title": self.title,
             "source": str(self.source) if self.source else None,
+            "source_label": self.source_label,
+            "partial": self.partial,
             "duration": round(self.duration, 2),
             "tempo": round(self.tempo, 1),
             "key": {
